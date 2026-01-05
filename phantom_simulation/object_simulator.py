@@ -13,11 +13,12 @@ class Phantom2DPetGenerator:
     def __init__(self, shape=(256, 256), voxel_size=(2,2,2), volume_activity=None):
         self.shape = shape
         self.voxel_size = voxel_size
+        #
         if volume_activity is not None:
-            self.volume_activity = volume_activity # in kBq/ml
+            self.volume_activity = volume_activity  # usually 1031.2922 kBq/ml
         else:
-            self.volume_activity=None
-            self.volume_activity = self.compute_average_volume_activity(n_samples=100)
+            self.volume_activity = None
+            self.avg_volume_activity = self.calibrate(n_samples=100)
 
     def set_seed(self, seed=None):
         if seed is not None:
@@ -45,23 +46,17 @@ class Phantom2DPetGenerator:
         self.body_b = b
         return self.create_ellipse(center=(0, 0), axes=(a, b))
 
-    def compute_average_size(self, n_samples=100):
-        """Generate n_samples bodies to compute the average object size."""
-        sizes = []
-        for _ in range(n_samples):
-            body = self.create_body()
-            sizes.append(np.count_nonzero(body) / (self.shape[0] * self.shape[1]))
-        self.avg_obj_size = np.mean(sizes, dtype=np.float32)
-        return self.avg_obj_size
-
-    def compute_average_volume_activity(self, n_samples=100):
+    def calibrate(self, n_samples=100):
         """Compute average volume activity in kBq/ml."""
+        print('Computing average volume activity over', n_samples, 'samples...')
         volume_activities = []
+        self.set_seed(42) # for consistent volume activity
         for _ in range(n_samples):
             obj, _ = self.create_phantom()
             body = obj > 0
             volume_activities.append(np.sum(obj) / (np.count_nonzero(body) * (self.voxel_size[0] * self.voxel_size[1] * self.voxel_size[2]) * 1e-3))  # kBq/mL
         self.avg_volume_activity = np.mean(volume_activities, dtype=np.float32)
+        print('Average volume activity:', self.avg_volume_activity, 'kBq/mL')
         return self.avg_volume_activity
 
     def create_organ(self, body, axes, position=(0,0), size_ratio=0.8, attempt=1):
