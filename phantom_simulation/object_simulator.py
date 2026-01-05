@@ -18,7 +18,7 @@ class Phantom2DPetGenerator:
             self.volume_activity = volume_activity  # usually 1031.2922 kBq/ml
         else:
             self.volume_activity = None
-            self.avg_volume_activity = self.calibrate(n_samples=100)
+            self.volume_activity = self.calibrate(n_samples=100)
 
     def set_seed(self, seed=None):
         if seed is not None:
@@ -55,9 +55,9 @@ class Phantom2DPetGenerator:
             obj, _ = self.create_phantom()
             body = obj > 0
             volume_activities.append(np.sum(obj) / (np.count_nonzero(body) * (self.voxel_size[0] * self.voxel_size[1] * self.voxel_size[2]) * 1e-3))  # kBq/mL
-        self.avg_volume_activity = np.mean(volume_activities, dtype=np.float32)
-        print('Average volume activity:', self.avg_volume_activity, 'kBq/mL')
-        return self.avg_volume_activity
+        self.volume_activity = np.mean(volume_activities, dtype=np.float32)
+        print('Average volume activity:', self.volume_activity, 'kBq/mL')
+        return self.volume_activity
 
     def create_organ(self, body, axes, position=(0,0), size_ratio=0.8, attempt=1):
         """
