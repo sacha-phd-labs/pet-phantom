@@ -6,11 +6,18 @@ except:
     print('Failed to import matplotlib')
 import albumentations as A
 
+from tools.image.castor import write_binary_file
+
 class Phantom2DPetGenerator:
 
-    def __init__(self, shape=(256, 256), voxel_size=(2,2,2)):
+    def __init__(self, shape=(256, 256), voxel_size=(2,2,2), volume_activity=None):
         self.shape = shape
         self.voxel_size = voxel_size
+        if volume_activity is not None:
+            self.volume_activity = volume_activity # in kBq/ml
+        else:
+            self.volume_activity=None
+            self.volume_activity = self.compute_average_volume_activity(n_samples=100)
 
     def set_seed(self, seed=None):
         if seed is not None:
@@ -38,14 +45,24 @@ class Phantom2DPetGenerator:
         self.body_b = b
         return self.create_ellipse(center=(0, 0), axes=(a, b))
 
-    def calibrate(self, n_samples=100):
+    def compute_average_size(self, n_samples=100):
         """Generate n_samples bodies to compute the average object size."""
         sizes = []
         for _ in range(n_samples):
             body = self.create_body()
-            sizes.append(np.sum(body) / (self.shape[0] * self.shape[1]))
-        self.avg_obj_size = np.mean(sizes)
+            sizes.append(np.count_nonzero(body) / (self.shape[0] * self.shape[1]))
+        self.avg_obj_size = np.mean(sizes, dtype=np.float32)
         return self.avg_obj_size
+
+    def compute_average_volume_activity(self, n_samples=100):
+        """Compute average volume activity in kBq/ml."""
+        volume_activities = []
+        for _ in range(n_samples):
+            obj, _ = self.create_phantom()
+            body = obj > 0
+            volume_activities.append(np.sum(obj) / (np.count_nonzero(body) * (self.voxel_size[0] * self.voxel_size[1] * self.voxel_size[2]) * 1e-3))  # kBq/mL
+        self.avg_volume_activity = np.mean(volume_activities, dtype=np.float32)
+        return self.avg_volume_activity
 
     def create_organ(self, body, axes, position=(0,0), size_ratio=0.8, attempt=1):
         """
@@ -142,59 +159,12 @@ class Phantom2DPetGenerator:
         out = np.where(obj == 0, 0, out)
         return out
 
-    def save_file(self, img, dout):
-        """Save file in the .img/.hdr format so that images can be used in castor"""
-
-        header=f"""!imaging modality := phantom
-!version of keys := CASToRv3.1
-CASToR version := 3.1
-
-!GENERAL DATA :=
-!originating system := create_phantom
-!data offset in bytes := 0
-!name of data file := {os.path.basename(dout)}.img
-patient name := {os.path.basename(dout)}
-
-!GENERAL IMAGE DATA
-!type of data := Static
-!total number of images := 1
-imagedata byte order := LITTLEENDIAN
-!study duration (sec) := 1
-
-!STATIC STUDY (General) :=
-number of dimensions := 3
-!matrix size [1] := {img.shape[0]}
-!matrix size [2] := {img.shape[1]}
-!matrix size [3] := 1
-!number format := short float
-!number of bytes per pixel := 4
-scaling factor (mm/pixel) [1] := {self.voxel_size[0]}
-scaling factor (mm/pixel) [2] := {self.voxel_size[1]}
-scaling factor (mm/pixel) [3] := {self.voxel_size[2]}
-first pixel offset (mm) [1] := 0
-first pixel offset (mm) [2] := 0
-first pixel offset (mm) [3] := 0
-data rescale offset := 0
-data rescale slope := 1
-quantification units := 1
-!image duration (sec) := 1
-!image start time (sec) := 0"""
-
-        # Write header file
-        with open(dout + '.hdr', 'w') as f:
-            f.write(header)
-
-        # Write image data file
-        with open(dout + '.img', 'wb') as f:
-            img.astype(np.float32).tofile(f)
-
-        return os.path.join(os.path.abspath('.'), dout)
-
-    def run(self, dest_path):
+    def create_phantom(self):
         """
         Generation function for body creation, organ embedding, tumour embedding.
+        Returns object and attenuation map.
         """
-        
+
         # Create body
         body = self.create_body()
         body_activity_min, body_activity_max = 5, 8
@@ -249,6 +219,61 @@ quantification units := 1
         out, seed = self.postprocess(out, seed=None)
         attenuation_map, _ = self.postprocess(attenuation_map, seed=seed)
 
+        # Scale activity values to match desired volume activity if specified
+        if self.volume_activity is not None:
+            body = out > 0
+            current_volume_activity = np.sum(out) / (np.count_nonzero(body) * (self.voxel_size[0] * self.voxel_size[1] * self.voxel_size[2]) * 1e-3)  # kBq/mL
+            scaling_factor = self.volume_activity / current_volume_activity
+            out = out * scaling_factor
+
+        return out, attenuation_map
+
+    def save_file(self, img, dout):
+        """Save file in the .img/.hdr format so that images can be used in castor"""
+
+        metadata = {
+            '!imaging modality': 'phantom',
+            '!version of keys': 'CASToRv3.1',
+            'CASToR version': '3.1',
+            '!originating system': 'create_phantom',
+            '!data offset in bytes': '0',
+            '!name of data file': f'{os.path.basename(dout)}.img',
+            'patient name': os.path.basename(dout),
+            '!type of data': 'Static',
+            '!total number of images': '1',
+            'imagedata byte order': 'LITTLEENDIAN',
+            '!study duration (sec)': '1',
+            'number of dimensions': '3',
+            '!matrix size [1]': str(img.shape[0]),
+            '!matrix size [2]': str(img.shape[1]),
+            '!matrix size [3]': '1',
+            '!number format': 'short float',
+            '!number of bytes per pixel': '4',
+            'scaling factor (mm/pixel) [1]': str(self.voxel_size[0]),
+            'scaling factor (mm/pixel) [2]': str(self.voxel_size[1]),
+            'scaling factor (mm/pixel) [3]': str(self.voxel_size[2]),
+            'first pixel offset (mm) [1]': '0',
+            'first pixel offset (mm) [2]': '0',
+            'first pixel offset (mm) [3]': '0',
+            'data rescale offset': '0',
+            'data rescale slope': '1',
+            'quantification units': '1',
+            '!image duration (sec)': '1',
+            '!image start time (sec)': '0'
+        }
+
+        write_binary_file(dout, img, metadata=metadata, binary_extension='.img')
+
+        return os.path.join(os.path.abspath('.'), dout)
+
+    def run(self, dest_path):
+        """
+        Run phantom creation
+        Returns object path and attenuation map path.
+        """
+        
+        out, attenuation_map = self.create_phantom()
+
         # Save files
         if not os.path.exists(dest_path):
             os.makedirs(dest_path)
@@ -260,7 +285,7 @@ quantification units := 1
 
 if __name__ == '__main__':
 
-    generator = Phantom2DPetGenerator()
+    generator = Phantom2DPetGenerator(volume_activity=1e3)  # 1000 kBq/ml
     obj, att = generator.run(dest_path='./data')
 
     with open(obj + '.img', 'rb') as f:
