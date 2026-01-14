@@ -19,7 +19,8 @@ setup(
     include_package_data=True,
     install_requires=[
         "albumentations==2.0.6",
-        "numpy"
+        "numpy",
+        "toolbox @ git+https://github.com/sacha-phd-labs/toolbox.git"
     ],
     python_requires=">=3.8",
     license="MIT",
