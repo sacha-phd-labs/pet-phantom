@@ -1,0 +1,50 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Phantom generator tests
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  test_phantom_generator:
+
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Start container
+      run: |
+        docker run -d -v $PWD:/workspace -w /workspace -e WORKSPACE=/workspace \
+        --name runner-simulation python:3.11-buster tail -f /dev/null
+
+    - name: Install dependencies
+      run: |
+          docker exec runner-simulation bash -c "\
+          pip install --upgrade pip && \
+          pip install pytest && \
+          pip install ."
+    # - name: Lint with flake8
+    #   run: |
+    #     # stop the build if there are Python syntax errors or undefined names
+    #     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+    #     # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+    #     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+    - name: Test with pytest
+      run: |
+          docker exec runner-simulation pytest
+
+    - name: Clean up and stop container
+      if: always()
+      run: |
+        docker exec runner-simulation bash -c "rm -rf -- * .[^.] .??*" && \
+        docker stop runner-simulation && \
+        docker rm runner-simulation
